@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 from pathlib import Path
 from DetailsScraper import DetailsScraping
-from SavingOnDrive import SavingOnDrive
+from SavingOnDriveJobs import SavingOnDriveJobs
 
 
 class JobsMainScraper:
@@ -138,7 +138,7 @@ class JobsMainScraper:
                 self.logger.info("Environment variable JOBS_GCLOUD_KEY_JSON is set.")
 
             credentials_dict = json.loads(credentials_json)
-            drive_saver = SavingOnDrive(credentials_dict)
+            drive_saver = SavingOnDriveJobs(credentials_dict)
             drive_saver.authenticate()
             self.logger.info("Testing Drive API access...")
             try:
