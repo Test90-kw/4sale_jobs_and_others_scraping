@@ -41,13 +41,13 @@ jobs:
           
       - name: Run the scraper
         env:
-          JOBS_GCLOUD_KEY_JSON: ${{ secrets.JOBS_GCLOUD_KEY_JSON }}
+          JOBS_GCLOUD_KEY_JSON: ${{ secrets.GCLOUD_KEY_JSON }}
         run: |
           python jobs_main.py
       
       - name: Run the scraper2
         env:
-          OTHERS_GCLOUD_KEY_JSON: ${{ secrets.OTHERS_GCLOUD_KEY_JSON }}
+          OTHERS_GCLOUD_KEY_JSON: ${{ secrets.GCLOUD_KEY_JSON }}
         run: |
           python others_main.py
       
