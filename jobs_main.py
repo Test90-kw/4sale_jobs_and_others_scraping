@@ -1,34 +1,49 @@
-import asyncio
-import pandas as pd
-import os
-import json
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
-from pathlib import Path
-from DetailsScraper import DetailsScraping
-from SavingOnDriveJobs import SavingOnDriveJobs
+# Imports for required functionality
+import asyncio  # For asynchronous operations
+import pandas as pd  # For working with tabular data
+import os  # For file and environment variable handling
+import json  # For parsing JSON strings
+import logging  # For logging events and errors
+from datetime import datetime, timedelta  # For working with timestamps
+from typing import Dict, List, Tuple  # Type hinting
+from pathlib import Path  # For file path operations
+from DetailsScraper import DetailsScraping  # Scraper for extracting job card details
+from SavingOnDriveJobs import SavingOnDriveJobs  # Class to save files to Google Drive
 
 
 class JobsMainScraper:
     def __init__(self, jobs_data: Dict[str, List[Tuple[str, int]]]):
+        # A dictionary mapping job categories to a list of URL templates and page counts
         self.jobs_data = jobs_data
+
+        # Number of job categories to process in each chunk
         self.chunk_size = 2
+
+        # Limit of concurrent link processing
         self.max_concurrent_links = 2
+
+        # Logger for tracking progress and issues
         self.logger = logging.getLogger(__name__)
         self.setup_logging()
+
+        # Temporary directory to store Excel files before uploading
         self.temp_dir = Path("temp_files")
         self.temp_dir.mkdir(exist_ok=True)
+
+        # Retry settings for file uploads
         self.upload_retries = 3
-        self.upload_retry_delay = 15
-        self.page_delay = 3
-        self.chunk_delay = 10
+        self.upload_retry_delay = 15  # in seconds
+
+        # Delay settings
+        self.page_delay = 3  # delay between pages during scraping
+        self.chunk_delay = 10  # delay between chunks
 
     def setup_logging(self):
         """Initialize logging configuration."""
-        stream_handler = logging.StreamHandler()
-        file_handler = logging.FileHandler("scraper.log")
+        stream_handler = logging.StreamHandler()  # Log to console
+        file_handler = logging.FileHandler("scraper.log")  # Log to file
 
+        # Configure logging format and level
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
@@ -38,7 +53,7 @@ class JobsMainScraper:
         print("Logging setup complete.")
 
     async def scrape_job(self, job_name: str, urls: List[Tuple[str, int]], semaphore: asyncio.Semaphore) -> List[Dict]:
-        """Scrape data for a single category."""
+        """Scrape data for a single job category."""
         self.logger.info(f"Starting to scrape {job_name}")
         card_data = []
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -51,6 +66,7 @@ class JobsMainScraper:
                     try:
                         cards = await scraper.get_card_details()
                         for card in cards:
+                            # Filter only cards published yesterday
                             if card.get("date_published") and card.get("date_published", "").split()[0] == yesterday:
                                 card_data.append(card)
 
@@ -67,12 +83,12 @@ class JobsMainScraper:
             self.logger.info(f"No data to save for {job_name}, skipping Excel file creation.")
             return None
 
-        # Sanitize filename by replacing invalid characters
-        safe_name = job_name.replace('/', '_').replace('\\', '_')
+        safe_name = job_name.replace('/', '_').replace('\\', '_')  # Sanitize filename
         excel_file = Path(f"{safe_name}.xlsx")
+
         try:
-            df = pd.DataFrame(card_data)
-            df.to_excel(excel_file, index=False)
+            df = pd.DataFrame(card_data)  # Convert to DataFrame
+            df.to_excel(excel_file, index=False)  # Save to Excel
             self.logger.info(f"Successfully saved data for {job_name}")
             return str(excel_file)
         except Exception as e:
@@ -88,7 +104,8 @@ class JobsMainScraper:
             self.logger.info(f"Checking local files before upload: {files}")
             for file in files:
                 self.logger.info(f"File {file} exists: {os.path.exists(file)}, size: {os.path.getsize(file) if os.path.exists(file) else 'N/A'}")
- 
+
+            # Get or create Google Drive folder
             folder_id = drive_saver.get_folder_id(yesterday)
             if not folder_id:
                 self.logger.info(f"Creating new folder for date: {yesterday}")
@@ -97,6 +114,7 @@ class JobsMainScraper:
                     raise Exception("Failed to create or get folder ID")
                 self.logger.info(f"Created new folder '{yesterday}' with ID: {folder_id}")
 
+            # Upload each file with retries
             for file in files:
                 for attempt in range(self.upload_retries):
                     try:
@@ -115,7 +133,7 @@ class JobsMainScraper:
                         if attempt < self.upload_retries - 1:
                             self.logger.info(f"Retrying after {self.upload_retry_delay} seconds...")
                             await asyncio.sleep(self.upload_retry_delay)
-                            drive_saver.authenticate()  # Re-authenticate before retry
+                            drive_saver.authenticate()  # Re-authenticate on failure
                         else:
                             self.logger.error(f"Failed to upload {file} after {self.upload_retries} attempts")
 
@@ -124,9 +142,9 @@ class JobsMainScraper:
             raise
 
         return uploaded_files
-    
+
     async def scrape_all_jobs(self):
-        """Scrape all categories and handle uploads."""
+        """Scrape all categories and handle uploads to Google Drive."""
         self.temp_dir.mkdir(exist_ok=True)
 
         # Setup Google Drive
@@ -140,6 +158,8 @@ class JobsMainScraper:
             credentials_dict = json.loads(credentials_json)
             drive_saver = SavingOnDriveJobs(credentials_dict)
             drive_saver.authenticate()
+
+            # Test access to parent folder
             self.logger.info("Testing Drive API access...")
             try:
                 drive_saver.service.files().get(fileId=drive_saver.parent_folder_id).execute()
@@ -151,6 +171,7 @@ class JobsMainScraper:
             self.logger.error(f"Failed to setup Google Drive: {e}")
             return
 
+        # Split job categories into chunks
         jobs_chunks = [
             list(self.jobs_data.items())[i : i + self.chunk_size]
             for i in range(0, len(self.jobs_data), self.chunk_size)
@@ -158,6 +179,7 @@ class JobsMainScraper:
 
         semaphore = asyncio.Semaphore(self.max_concurrent_links)
 
+        # Process each chunk
         for chunk_index, chunk in enumerate(jobs_chunks, 1):
             self.logger.info(f"Processing chunk {chunk_index}/{len(jobs_chunks)}")
 
@@ -165,7 +187,7 @@ class JobsMainScraper:
             for job_name, urls in chunk:
                 task = asyncio.create_task(self.scrape_job(job_name, urls, semaphore))
                 tasks.append((job_name, task))
-                await asyncio.sleep(2)
+                await asyncio.sleep(2)  # Delay between job launches
 
             pending_uploads = []
             for job_name, task in tasks:
@@ -193,6 +215,7 @@ class JobsMainScraper:
                 await asyncio.sleep(self.chunk_delay)
 
 
+# Define jobs to scrape: mapping of job name -> (URL template, number of pages)
 if __name__ == "__main__":
     jobs_data = {
         "وظائف شاغرة": [("https://www.q84sale.com/ar/jobs/job-openings/{}", 4)],
@@ -205,11 +228,9 @@ if __name__ == "__main__":
         "خدمات تعليمية": [("https://www.q84sale.com/ar/jobs/teaching-services/{}", 1)],
     }
 
-
-    
+    # Start scraping and uploading
     async def main():
         scraper = JobsMainScraper(jobs_data)
         await scraper.scrape_all_jobs()
-
 
     asyncio.run(main())
