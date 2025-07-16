@@ -1,33 +1,34 @@
-import asyncio
-import pandas as pd
-import os
-import json
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
-from pathlib import Path
-from DetailsScraper import DetailsScraping
-from SavingOnDriveOthers import SavingOnDriveOthers
+# Required imports
+import asyncio  # For async operations
+import pandas as pd  # For working with tabular data
+import os  # For environment variable and file path handling
+import json  # For parsing JSON-formatted credentials
+import logging  # For logging info and errors
+from datetime import datetime, timedelta  # For handling dates
+from typing import Dict, List, Tuple  # Type hinting
+from pathlib import Path  # To manage file system paths
+from DetailsScraper import DetailsScraping  # Scraper class to fetch data from a URL
+from SavingOnDriveOthers import SavingOnDriveOthers  # Handles uploading to Google Drive
 
 
 class OthersMainScraper:
     def __init__(self, others_data: Dict[str, List[Tuple[str, int]]]):
-        self.others_data = others_data
-        self.chunk_size = 2
-        self.max_concurrent_links = 2
-        self.logger = logging.getLogger(__name__)
-        self.setup_logging()
-        self.temp_dir = Path("temp_files")
-        self.temp_dir.mkdir(exist_ok=True)
-        self.upload_retries = 3
-        self.upload_retry_delay = 15
-        self.page_delay = 3
-        self.chunk_delay = 10
+        self.others_data = others_data  # Dictionary mapping category names to URLs and page counts
+        self.chunk_size = 2  # Number of categories to process at once (in parallel chunks)
+        self.max_concurrent_links = 2  # Max concurrent page scrapes
+        self.logger = logging.getLogger(__name__)  # Logger for this class
+        self.setup_logging()  # Setup log output to file and console
+        self.temp_dir = Path("temp_files")  # Temp folder to store Excel files
+        self.temp_dir.mkdir(exist_ok=True)  # Create the temp folder if it doesn't exist
+        self.upload_retries = 3  # Number of times to retry uploading to Drive
+        self.upload_retry_delay = 15  # Seconds between retry attempts
+        self.page_delay = 3  # Delay between scraping pages
+        self.chunk_delay = 10  # Delay between chunks
 
     def setup_logging(self):
         """Initialize logging configuration."""
-        stream_handler = logging.StreamHandler()
-        file_handler = logging.FileHandler("scraper.log")
+        stream_handler = logging.StreamHandler()  # Console output
+        file_handler = logging.FileHandler("scraper.log")  # File log output
 
         logging.basicConfig(
             level=logging.INFO,
@@ -41,20 +42,21 @@ class OthersMainScraper:
         """Scrape data for a single category."""
         self.logger.info(f"Starting to scrape {other_name}")
         card_data = []
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")  # Target date filter
 
         async with semaphore:
             for url_template, page_count in urls:
                 for page in range(1, page_count + 1):
-                    url = url_template.format(page)
-                    scraper = DetailsScraping(url)
+                    url = url_template.format(page)  # Build URL by inserting page number
+                    scraper = DetailsScraping(url)  # Instantiate scraper
                     try:
-                        cards = await scraper.get_card_details()
+                        cards = await scraper.get_card_details()  # Fetch data from page
                         for card in cards:
+                            # Only include listings from yesterday
                             if card.get("date_published") and card.get("date_published", "").split()[0] == yesterday:
                                 card_data.append(card)
 
-                        await asyncio.sleep(self.page_delay)
+                        await asyncio.sleep(self.page_delay)  # Delay between pages
                     except Exception as e:
                         self.logger.error(f"Error scraping {url}: {e}")
                         continue
@@ -67,12 +69,12 @@ class OthersMainScraper:
             self.logger.info(f"No data to save for {other_name}, skipping Excel file creation.")
             return None
 
-        # Sanitize filename by replacing invalid characters
-        safe_name = other_name.replace('/', '_').replace('\\', '_')
+        safe_name = other_name.replace('/', '_').replace('\\', '_')  # Replace invalid characters in filename
         excel_file = Path(f"{safe_name}.xlsx")
+
         try:
-            df = pd.DataFrame(card_data)
-            df.to_excel(excel_file, index=False)
+            df = pd.DataFrame(card_data)  # Convert data to DataFrame
+            df.to_excel(excel_file, index=False)  # Save DataFrame to Excel
             self.logger.info(f"Successfully saved data for {other_name}")
             return str(excel_file)
         except Exception as e:
@@ -88,7 +90,8 @@ class OthersMainScraper:
             self.logger.info(f"Checking local files before upload: {files}")
             for file in files:
                 self.logger.info(f"File {file} exists: {os.path.exists(file)}, size: {os.path.getsize(file) if os.path.exists(file) else 'N/A'}")
- 
+
+            # Get folder for yesterday, or create it if it doesn't exist
             folder_id = drive_saver.get_folder_id(yesterday)
             if not folder_id:
                 self.logger.info(f"Creating new folder for date: {yesterday}")
@@ -97,6 +100,7 @@ class OthersMainScraper:
                     raise Exception("Failed to create or get folder ID")
                 self.logger.info(f"Created new folder '{yesterday}' with ID: {folder_id}")
 
+            # Try uploading each file, with retry mechanism
             for file in files:
                 for attempt in range(self.upload_retries):
                     try:
@@ -124,24 +128,26 @@ class OthersMainScraper:
             raise
 
         return uploaded_files
-    
+
     async def scrape_all_others(self):
         """Scrape all categories and handle uploads."""
-        self.temp_dir.mkdir(exist_ok=True)
+        self.temp_dir.mkdir(exist_ok=True)  # Ensure temp folder exists
 
         # Setup Google Drive
         try:
-            credentials_json = os.environ.get("OTHERS_GCLOUD_KEY_JSON")
+            credentials_json = os.environ.get("OTHERS_GCLOUD_KEY_JSON")  # Get credentials from env var
             if not credentials_json:
                 raise EnvironmentError("OTHERS_GCLOUD_KEY_JSON environment variable not found")
             else:
                 self.logger.info("Environment variable OTHERS_GCLOUD_KEY_JSON is set.")
 
-            credentials_dict = json.loads(credentials_json)
+            credentials_dict = json.loads(credentials_json)  # Parse JSON credentials
             drive_saver = SavingOnDriveOthers(credentials_dict)
-            drive_saver.authenticate()
+            drive_saver.authenticate()  # Authenticate with Google Drive
+
             self.logger.info("Testing Drive API access...")
             try:
+                # Test parent folder access
                 drive_saver.service.files().get(fileId=drive_saver.parent_folder_id).execute()
                 self.logger.info("Successfully accessed parent folder")
             except Exception as e:
@@ -151,6 +157,7 @@ class OthersMainScraper:
             self.logger.error(f"Failed to setup Google Drive: {e}")
             return
 
+        # Split work into chunks
         others_chunks = [
             list(self.others_data.items())[i : i + self.chunk_size]
             for i in range(0, len(self.others_data), self.chunk_size)
@@ -165,12 +172,12 @@ class OthersMainScraper:
             for other_name, urls in chunk:
                 task = asyncio.create_task(self.scrape_other(other_name, urls, semaphore))
                 tasks.append((other_name, task))
-                await asyncio.sleep(2)
+                await asyncio.sleep(2)  # Delay between launching each task
 
             pending_uploads = []
             for other_name, task in tasks:
                 try:
-                    card_data = await task
+                    card_data = await task  # Await result of scraping
                     if card_data:
                         excel_file = await self.save_to_excel(other_name, card_data)
                         if excel_file:
@@ -178,9 +185,11 @@ class OthersMainScraper:
                 except Exception as e:
                     self.logger.error(f"Error processing {other_name}: {e}")
 
+            # Upload all collected Excel files
             if pending_uploads:
                 await self.upload_files_with_retry(drive_saver, pending_uploads)
 
+                # Cleanup local files
                 for file in pending_uploads:
                     try:
                         os.remove(file)
@@ -188,11 +197,13 @@ class OthersMainScraper:
                     except Exception as e:
                         self.logger.error(f"Error cleaning up {file}: {e}")
 
+            # Wait before starting next chunk
             if chunk_index < len(others_chunks):
                 self.logger.info(f"Waiting {self.chunk_delay} seconds before next chunk...")
                 await asyncio.sleep(self.chunk_delay)
 
 
+# Data categories to scrape, with their URL templates and number of pages
 if __name__ == "__main__":
     others_data = {
         "عملات و طوابع و تحف قديمه": [("https://www.q84sale.com/ar/others/currencies-stamps-and-antiques/{}", 1)],
@@ -205,11 +216,9 @@ if __name__ == "__main__":
         "متفرقات أخرى": [("https://www.q84sale.com/ar/others/other-miscellaneous/{}", 3)],
     }
 
-
-    
+    # Main entry point: start scraping process
     async def main():
         scraper = OthersMainScraper(others_data)
         await scraper.scrape_all_others()
 
-
-    asyncio.run(main())
+    asyncio.run(main())  # Run the async main function
